@@ -75,12 +75,19 @@ Rebuild only after changing `app.py`, `pixel_art.py`, or `requirements.txt`:
 rm -rf infra/dist/package infra/dist/image-processor.zip
 mkdir -p infra/dist/package
 
-python3 -m pip install   --platform manylinux2014_x86_64   --implementation cp   --python-version 3.12   --abi cp312   --only-binary=:all:   --target infra/dist/package   -r lambda/image_processor/requirements.txt
+python3 -m pip install \
+  --platform manylinux2014_x86_64 \
+  --implementation cp \
+  --python-version 3.12 \
+  --abi cp312 \
+  --only-binary=:all: \
+  --target infra/dist/package \
+  -r lambda/image_processor/requirements.txt
 
 cp lambda/image_processor/app.py infra/dist/package/
 cp lambda/image_processor/pixel_art.py infra/dist/package/
 (cd infra/dist/package && zip -qr ../image-processor.zip .)
-shasum -a 256 infra/dist/image-processor.zip
+(cd infra/dist && shasum -a 256 image-processor.zip > image-processor.sha256)
 ```
 
 ## Infrastructure
