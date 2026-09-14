@@ -1,8 +1,8 @@
 # AWS IoT Photo Frame Workshop
 
-ESP-IDF firmware, an AWS Lambda image processor, and CloudFormation templates for the [Waveshare ESP32-S3-Touch-LCD-7](https://www.waveshare.com/esp32-s3-touch-lcd-7.htm).
+This repository contains the firmware and AWS infrastructure for a cloud-connected photo frame built with the [Waveshare ESP32-S3-Touch-LCD-7](https://www.waveshare.com/esp32-s3-touch-lcd-7.htm).
 
-Upload a JPEG or PNG to a private S3 bucket and the frame receives an AWS IoT Core notification, downloads the processed 800×480 RGB565 image, displays it, and saves it locally across restarts.
+Upload a JPEG or PNG to a private S3 bucket, and the frame receives an AWS IoT Core notification, downloads the processed 800×480 RGB565 image, displays it, and saves it locally across restarts.
 
 ## Repository contents
 
