@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS IoT desk photo frame MVP.
+
+Parameters:
+  ArtifactBucketName:
+    Type: String
+  ArtifactObjectKey:
+    Type: String
+  PhotoBucketName:
+    Type: String
+  ThingName:
+    Type: String
+    Default: desk-photo-frame-001
+  LambdaFunctionName:
+    Type: String
+    Default: iot-photo-frame-processor
+  LambdaRoleName:
+    Type: String
+    Default: iot-photo-frame-lambda-role
+  IoTPolicyName:
+    Type: String
+    Default: desk-photo-frame-001-policy
+  IoTDataEndpoint:
+    Type: String
+  DeviceCertificateSigningRequest:
+    Type: String
+    Description: PEM-encoded certificate signing request. The private key remains local.
+  EnablePixelArt:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Apply the original Pillow pixel-art transform before RGB565 conversion.
+  PixelArtBlockSize:
+    Type: Number
+    Default: 8
+    MinValue: 1
+    MaxValue: 128
+  PixelArtPaletteSize:
+    Type: Number
+    Default: 32
+    MinValue: 2
+    MaxValue: 256
+  PixelArtDither:
+    Type: String
+    Default: none
+    AllowedValues:
+      - none
+      - floyd-steinberg
+
+Resources:
+  ProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref LambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: PhotoFrameDataAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadIncomingAndProcessedObjects
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}/incoming/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}/processed/*"
+              - Sid: WriteProcessedObjects
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}/processed/*"
+              - Sid: PublishImageNotification
+                Effect: Allow
+                Action: iot:Publish
+                Resource: !Sub "arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/photo-frame/${ThingName}/image-ready"
+      Tags:
+        - Key: Project
+          Value: IoTPhotoFrame
+
+  ProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Description: Converts uploaded photos into 800x480 little-endian RGB565 frames.
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Handler: app.lambda_handler
+      Role: !GetAtt ProcessorRole.Arn
+      MemorySize: 1024
+      Timeout: 30
+      EphemeralStorage:
+        Size: 512
+      Code:
+        S3Bucket: !Ref ArtifactBucketName
+        S3Key: !Ref ArtifactObjectKey
+      Environment:
+        Variables:
+          PHOTO_BUCKET: !Ref PhotoBucketName
+          IOT_DATA_ENDPOINT: !Ref IoTDataEndpoint
+          IMAGE_READY_TOPIC: !Sub "photo-frame/${ThingName}/image-ready"
+          PRESIGNED_URL_SECONDS: "3600"
+          PIXEL_ART_ENABLED: !Ref EnablePixelArt
+          PIXEL_ART_BLOCK_SIZE: !Ref PixelArtBlockSize
+          PIXEL_ART_PALETTE_SIZE: !Ref PixelArtPaletteSize
+          PIXEL_ART_DITHER: !Ref PixelArtDither
+      Tags:
+        - Key: Project
+          Value: IoTPhotoFrame
+
+  ProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${LambdaFunctionName}"
+      RetentionInDays: 7
+
+  AllowS3InvokeProcessor:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:${AWS::Partition}:s3:::${PhotoBucketName}"
+
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: AllowS3InvokeProcessor
+    Properties:
+      BucketName: !Ref PhotoBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: incoming/
+      Tags:
+        - Key: Project
+          Value: IoTPhotoFrame
+
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt PhotoBucket.Arn
+              - !Sub "${PhotoBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  FrameThing:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Ref ThingName
+      AttributePayload:
+        Attributes:
+          project: IoTPhotoFrame
+
+  FramePolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Ref IoTPolicyName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ConnectAsThisFrame
+            Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub "arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/${ThingName}"
+          - Sid: SubscribeForImages
+            Effect: Allow
+            Action: iot:Subscribe
+            Resource: !Sub "arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/photo-frame/${ThingName}/image-ready"
+          - Sid: ReceiveImages
+            Effect: Allow
+            Action: iot:Receive
+            Resource: !Sub "arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/photo-frame/${ThingName}/image-ready"
+          - Sid: PublishStatus
+            Effect: Allow
+            Action: iot:Publish
+            Resource: !Sub "arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/photo-frame/${ThingName}/status"
+
+  FrameCertificate:
+    Type: AWS::IoT::Certificate
+    Properties:
+      CertificateSigningRequest: !Ref DeviceCertificateSigningRequest
+      Status: ACTIVE
+
+  AttachPolicyToCertificate:
+    Type: AWS::IoT::PolicyPrincipalAttachment
+    Properties:
+      PolicyName: !Ref FramePolicy
+      Principal: !GetAtt FrameCertificate.Arn
+
+  AttachCertificateToThing:
+    Type: AWS::IoT::ThingPrincipalAttachment
+    Properties:
+      ThingName: !Ref FrameThing
+      Principal: !GetAtt FrameCertificate.Arn
+
+Outputs:
+  PhotoBucketName:
+    Value: !Ref PhotoBucket
+  UploadPrefix:
+    Value: incoming/
+  ProcessorFunctionName:
+    Value: !Ref ProcessorFunction
+  ThingName:
+    Value: !Ref FrameThing
+  IoTDataEndpoint:
+    Value: !Ref IoTDataEndpoint
+  ImageReadyTopic:
+    Value: !Sub "photo-frame/${ThingName}/image-ready"
+  StatusTopic:
+    Value: !Sub "photo-frame/${ThingName}/status"
+  DeviceCertificateArn:
+    Value: !GetAtt FrameCertificate.Arn
+  DeviceCertificateId:
+    Value: !GetAtt FrameCertificate.Id

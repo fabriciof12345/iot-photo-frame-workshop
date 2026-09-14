@@ -1,0 +1,15 @@
+menu "IoT Photo Frame"
+
+config PHOTO_FRAME_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+        The 2.4 GHz Wi-Fi network used by the photo frame.
+
+config PHOTO_FRAME_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+    help
+        Stored only in the generated sdkconfig file, which is ignored by Git.
+
+endmenu

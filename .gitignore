@@ -1,0 +1,13 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+infra/dist/package/
+secrets/
+main/certs/
+main/wifi_config.h
